@@ -14,7 +14,7 @@
     }
     label {
       display: inline-block;
-      width: 300px;
+      width: 300px; /* Adjusted for potentially longer label */
     }
     input, select {
       padding: 5px;
@@ -50,7 +50,7 @@
     <input type="number" id="initialPrincipal" value="0" min="0">
   </div>
   <div class="input-group">
-    <label for="growth">Annual Investment Growth %</label>
+    <label for="growth">Annual Investment Growth % (before inflation)</label>
     <input type="number" id="growth" value="7.0" step="0.1">
   </div>
   <div class="input-group">
@@ -61,20 +61,20 @@
   <div class="input-group">
     <label for="mode">Retirement Mode</label>
     <select id="mode">
-      <option value="spending">Fixed Spending (£/year)</option>
-      <option value="drawdown">Drawdown %</option>
+      <option value="spending">Fixed Real Spending (£/year)</option>
+      <option value="drawdown">Drawdown % of Current Balance</option>
     </select>
   </div>
   <div class="input-group" id="spendingGroup">
-    <label for="spendTarget">Annual Spend (£)</label>
+    <label for="spendTarget">Annual Real Spend (£)</label>
     <input type="number" id="spendTarget" value="40000" step="1000">
   </div>
   <div class="input-group" id="drawdownGroup" style="display:none;">
-    <label for="drawdownPct">Drawdown %</label>
+    <label for="drawdownPct">Annual Drawdown %</label>
     <input type="number" id="drawdownPct" value="4.0" step="0.1">
   </div>
   <div class="input-group">
-    <label for="retReturn">Retirement Annual Return %</label>
+    <label for="retReturn">Retirement Annual <b>Real</b> Return %</label>
     <input type="number" id="retReturn" value="5.0" step="0.1">
   </div>
   <button onclick="runProjection()">Update Projection</button>
@@ -88,6 +88,12 @@
       const mode = this.value;
       document.getElementById('spendingGroup').style.display = mode === 'spending' ? '' : 'none';
       document.getElementById('drawdownGroup').style.display = mode === 'drawdown' ? '' : 'none';
+      // Update labels based on mode for clarity
+      if (mode === 'spending') {
+        document.querySelector('#spendingGroup label').textContent = 'Annual Real Spend (£)';
+      } else if (mode === 'drawdown') {
+         document.querySelector('#drawdownGroup label').textContent = 'Annual Drawdown % (of current balance)';
+      }
     });
 
     function resetForm() {
@@ -103,63 +109,110 @@
       document.getElementById('retReturn').value = 5.0;
       document.getElementById('spendingGroup').style.display = '';
       document.getElementById('drawdownGroup').style.display = 'none';
+      document.querySelector('#spendingGroup label').textContent = 'Annual Real Spend (£)'; // Reset label
+      document.querySelector('#drawdownGroup label').textContent = 'Annual Drawdown %'; // Reset label
+
+      // Optionally clear charts on reset
+      // Plotly.purge('chart-acc');
+      // Plotly.purge('chart-ret');
     }
 
     function runProjection() {
       const currentAge = parseInt(document.getElementById('ageNow').value);
       const retirementAge = parseInt(document.getElementById('retireAge').value);
+      
+      // SUGGESTION: Input validation for ages
+      if (retirementAge <= currentAge) {
+        alert("Retirement age must be greater than current age.");
+        Plotly.purge('chart-acc'); // Clear existing charts
+        Plotly.purge('chart-ret');
+        return;
+      }
+
       const months = (retirementAge - currentAge) * 12;
       const monthlySaving = parseFloat(document.getElementById('monthlySave').value);
       const initialPrincipal = parseFloat(document.getElementById('initialPrincipal').value);
       const growth = parseFloat(document.getElementById('growth').value) / 100;
       const inflation = parseFloat(document.getElementById('inflation').value) / 100;
 
-      const nominalMonthly = Math.pow(1 + growth, 1/12) - 1;
-      const realMonthly = (1 + nominalMonthly) / (1 + Math.pow(1 + inflation, 1/12)) - 1;
+      const nominalMonthlyGrowth = Math.pow(1 + growth, 1/12) - 1;
+      const monthlyInflation = Math.pow(1 + inflation, 1/12) - 1;
+      const realMonthlyGrowth = (1 + nominalMonthlyGrowth) / (1 + monthlyInflation) - 1;
+      // Alternative real monthly growth: const realMonthlyGrowth = Math.pow((1 + growth) / (1 + inflation), 1/12) - 1; (Effectively the same)
+
 
       let balanceNom = [], balanceReal = [], ages = [];
       let bN = initialPrincipal, bR = initialPrincipal;
 
       for (let i = 0; i < months; i++) {
-        bN = (bN + monthlySaving) * (1 + nominalMonthly);
-        const realSave = monthlySaving / Math.pow(1 + inflation, i/12);
-        bR = bR * (1 + realMonthly) + realSave;
+        const currentOverallYears = i / 12;
+        // Nominal: savings added at start of month, then interest
+        bN = (bN + monthlySaving) * (1 + nominalMonthlyGrowth);
+        
+        // Real: adjust saving to real terms, add at start of month, then real interest
+        const realSave = monthlySaving / Math.pow(1 + inflation, currentOverallYears);
+        // SUGGESTION: Consistent timing for real savings (add then grow)
+        bR = (bR + realSave) * (1 + realMonthlyGrowth); 
+        
         balanceNom.push(bN);
         balanceReal.push(bR);
-        ages.push(currentAge + i / 12);
+        ages.push(currentAge + currentOverallYears);
       }
 
       Plotly.newPlot('chart-acc', [
-        { x: ages, y: balanceNom, mode: 'lines', name: 'Nominal' },
-        { x: ages, y: balanceReal, mode: 'lines', name: 'Real' }
+        { x: ages, y: balanceNom, mode: 'lines', name: 'Nominal Value' },
+        { x: ages, y: balanceReal, mode: 'lines', name: 'Real Value (Today\'s £)' }
       ], {
-        title: 'Accumulation Phase', xaxis: { title: 'Age' }, yaxis: { title: 'Balance (£)' }
+        title: 'Accumulation Phase Projection', 
+        xaxis: { title: 'Age', tickformat: '.1f' }, // Show one decimal for age like 30.0, 30.1 etc.
+        yaxis: { title: 'Balance (£)', tickprefix: '£' }
       });
 
-      const retirementReal = bR;
-      const r = parseFloat(document.getElementById('retReturn').value) / 100;
+      const finalRealBalanceAtRetirement = bR; // This is the starting point for retirement in real terms
+      const retirementAnnualRealReturn = parseFloat(document.getElementById('retReturn').value) / 100;
       const mode = document.getElementById('mode').value;
-      const drawdownPct = parseFloat(document.getElementById('drawdownPct').value);
-      const spendTarget = parseFloat(document.getElementById('spendTarget').value);
+      const drawdownPct = parseFloat(document.getElementById('drawdownPct').value) / 100; // As decimal
+      const spendTarget = parseFloat(document.getElementById('spendTarget').value); // Annual real spend
 
-      let retireBalances = [retirementReal];
+      let retireBalances = [finalRealBalanceAtRetirement];
       let ageLabels = [retirementAge];
-      let draw = mode === 'spending' ? spendTarget : retirementReal * (drawdownPct / 100);
+      
+      // Initial draw amount for fixed spending, or as a basis for the first year of drawdown if needed
+      let baseAnnualDraw = (mode === 'spending') ? spendTarget : finalRealBalanceAtRetirement * drawdownPct;
 
-      for (let i = 1; i <= 30; i++) {
-        let last = retireBalances[retireBalances.length - 1];
-        let next = Math.max(0, last * (1 + r) - draw);
-        retireBalances.push(next);
-        ageLabels.push(retirementAge + i);
+      for (let yearInRetirement = 1; yearInRetirement <= 35; yearInRetirement++) { // Project for 35 years in retirement
+        let previousYearBalance = retireBalances[retireBalances.length - 1];
+        if (previousYearBalance <= 0) { // No money left
+            retireBalances.push(0);
+            ageLabels.push(retirementAge + yearInRetirement);
+            continue;
+        }
+
+        let currentYearWithdrawal;
+        if (mode === 'spending') {
+          currentYearWithdrawal = spendTarget;
+        } else { // mode === 'drawdown'
+          // SUGGESTION: Dynamic drawdown based on current balance
+          currentYearWithdrawal = previousYearBalance * drawdownPct;
+        }
+        
+        let balanceAfterGrowth = previousYearBalance * (1 + retirementAnnualRealReturn);
+        let nextBalance = Math.max(0, balanceAfterGrowth - currentYearWithdrawal);
+        
+        retireBalances.push(nextBalance);
+        ageLabels.push(retirementAge + yearInRetirement);
       }
 
       Plotly.newPlot('chart-ret', [
         { x: ageLabels, y: retireBalances, mode: 'lines', name: 'Retirement Balance (Real)' }
       ], {
-        title: 'Retirement Phase', xaxis: { title: 'Age' }, yaxis: { title: 'Real Balance (£)' }
+        title: 'Retirement Phase Projection (Real Terms)', 
+        xaxis: { title: 'Age' }, 
+        yaxis: { title: 'Real Balance (Today\'s £)', tickprefix: '£' }
       });
     }
 
+    // Run projection on initial load
     runProjection();
   </script>
 </body>
